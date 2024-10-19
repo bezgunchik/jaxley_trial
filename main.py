@@ -25,6 +25,8 @@ def build_cell_type3():
 	return cell
 
 if __name__ == '__main__':
-	cell = build_cell_type3()
-	runner = FlowRunner(cell=cell)
-	runner.run()
+	cells = [build_cell_type1(), build_cell_type2(), build_cell_type3()]
+	for cell in cells:
+		runner = FlowRunner(cell=cell)
+		runner.run()
+		
