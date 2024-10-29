@@ -2,68 +2,20 @@ import numpy as np
 
 from main import *
 from load_data import load_dataset
-from jax import vmap
+from jax import vmap, value_and_grad, debug, grad
+from sklearn.model_selection import train_test_split
+import optax
+from tensorflow.data import Dataset
+from jax import lax
 
-def flow():
-	layer0_size = 128
-	layer1_size = 10
-	layer2_size = 1
-	
-	input_cell = build_cell_type1()
-	intermidiate_cell = build_cell_type2()
-	total_cells_num = 139
-	cells = ([input_cell for _ in range(layer0_size)] +
-	         [intermidiate_cell for _ in range(layer1_size + layer2_size)])
-	net = jx.Network(cells)
-	
-	
 
-	
-	layer0 = net.cell(range(layer0_size))
-	layer1 = net.cell(range(layer0_size, layer0_size + layer1_size))
-	layer2 = net.cell(range(layer0_size + layer1_size, layer0_size + layer1_size + layer2_size))
-	fully_connect(layer0, layer1, IonotropicSynapse())
-	fully_connect(layer1, layer2, IonotropicSynapse())
-	
-	# Channels
-	net.insert(Na())
-	net.insert(K())
-	net.insert(Leak())
-	
-	# Visualize net
-	net.compute_xyz()
-	net.rotate(180)
-	fig, ax = plt.subplots(1, 1)
-	_ = net.vis(ax=ax, detail="full", layers=[layer0_size, layer1_size, layer2_size], layer_kwargs={"within_layer_offset": 15, "between_layer_offset": 25})
-	# _ = net.vis(ax=ax, detail="full", layers=[layer0_size, layer1_size, layer2_size], layer_kwargs={"within_layer_offset": 8, "between_layer_offset": 25})
-	plt.show()
-	
-	# Currently returns 1 sample
-	# TODO handle multimple inputs
-	x, y, d = load_dataset(0, 0)
-	
-	i_amp = 0.05
-	delta_t = 0.025
-	pixel_duration = 1
-	data_stimuli = None
-	for row_index, row in enumerate(x):
-		t_max = len(row)
-		currents = jx.datapoint_to_step_currents(i_delay=0.0, i_dur=1.0, i_amp=row * i_amp, delta_t=delta_t, t_max=t_max)
-		overall_current = sum_row_currents(currents, pixel_duration, delta_t)
-		# TODO to debug the difference between overall_current_np and overall_current
-		overall_current_np = np.repeat(row * i_amp, pixel_duration / delta_t)
-		if row_index % 30 == 0:
-			visualize_row_currents(overall_current, t_max=currents.shape[0], delta_t=delta_t, row_index=row_index)
-			visualize_row_currents(np.append(overall_current_np, [0]), t_max=currents.shape[0], delta_t=delta_t, row_index=row_index)
-		data_stimuli = net.cell(row_index).branch(0).loc(0.0).data_stimulate(overall_current, data_stimuli=data_stimuli)
-		if row_index == 50:
-			break
-	net.delete_recordings()
-	net.cell(total_cells_num - 1).branch(0).loc(0.0).record()
-	
-	recs = jx.integrate(net, data_stimuli=data_stimuli)
-	o = 0
 
+
+def image_row_to_current(row):
+	overall_current_jnp = jnp.repeat(row * i_amp, int(pixel_duration / delta_t))
+	return overall_current_jnp
+	# return jnp.insert(overall_current_jnp, 0, 0)
+	
 def visualize_row_currents(overall_current, t_max, delta_t, row_index):
 	num_time_steps = int(t_max / delta_t) + 1  # Adjusting to include t=0
 	time_vec = np.arange(0, num_time_steps * delta_t, delta_t)
@@ -80,6 +32,7 @@ def visualize_row_currents(overall_current, t_max, delta_t, row_index):
 	plt.tight_layout()
 	plt.show()
 
+
 def sum_row_currents(row_currents, pixel_duration, delta_t):
 	overall_current = np.zeros(row_currents.shape[1])
 	# Shift each pixel's current by its index in the row
@@ -92,18 +45,156 @@ def sum_row_currents(row_currents, pixel_duration, delta_t):
 		overall_current[start_idx:end_idx] += row_currents[i, :int(pixel_duration / delta_t)]
 	return overall_current
 
+visualize_net = False
 
-if __name__ == '__main__':
-	flow()
- 
+i_amp = 0.005
+delta_t = 1.0
+# delta_t = 0.025
+pixel_duration = 1
 
-# def simulate(params, inputs):
-#     currents = jx.datapoint_to_step_currents(i_delay=1.0, i_dur=1.0, i_amp=inputs / 10, delta_t=0.025, t_max=10.0)
-#
-#     data_stimuli = None
-#     data_stimuli = net.cell(0).branch(2).loc(1.0).data_stimulate(currents[0], data_stimuli=data_stimuli)
-#     data_stimuli = net.cell(1).branch(2).loc(1.0).data_stimulate(currents[1], data_stimuli=data_stimuli)
-#
-#     return jx.integrate(net, params=params, data_stimuli=data_stimuli)
+digit_width = 100
+batch_size = 1
 
+
+layer0_size = 128
+layer1_size = 10
+layer2_size = 1
+
+input_cell = build_cell_type1()
+intermidiate_cell = build_cell_type2()
+total_cells_num = 139
+cells = ([input_cell for _ in range(layer0_size)] +
+         [intermidiate_cell for _ in range(layer1_size + layer2_size)])
+net = jx.Network(cells)
+
+
+
+
+layer0 = net.cell(range(layer0_size))
+layer1 = net.cell(range(layer0_size, layer0_size + layer1_size))
+layer2 = net.cell(range(layer0_size + layer1_size, layer0_size + layer1_size + layer2_size))
+fully_connect(layer0, layer1, IonotropicSynapse())
+fully_connect(layer1, layer2, IonotropicSynapse())
+
+# Channels
+net.insert(Na())
+net.insert(K())
+net.insert(Leak())
+
+net.delete_recordings()
+net.cell(total_cells_num - 1).branch(0).loc(0.0).record()
+
+net.delete_trainables()
+net.make_trainable("radius")
+# net.make_trainable('radius')
+parameters = net.get_parameters()
+opt_params = parameters
+
+
+
+# Visualize net
+if visualize_net:
+	net.compute_xyz()
+	net.rotate(180)
+	fig, ax = plt.subplots(1, 1)
+	_ = net.vis(ax=ax, detail="full", layers=[layer0_size, layer1_size, layer2_size], layer_kwargs={"within_layer_offset": 15, "between_layer_offset": 25})
+	# _ = net.vis(ax=ax, detail="full", layers=[layer0_size, layer1_size, layer2_size], layer_kwargs={"within_layer_offset": 8, "between_layer_offset": 25})
+	plt.show()
+
+# Currently returns 1 sample
+X, Y, d = load_dataset(0, 0)
+
+
+def preprocess_labels(labels):
+	result = jnp.roll(labels, digit_width) # Shift 100 pixels right
+	result = jnp.repeat(result * i_amp, int(pixel_duration / delta_t), axis=1) # Convert to current
+	# return result # Add t0 value
+	return jnp.insert(result, 0, 0, axis=1) # Add t0 value
+
+# The following two functions are for different length inputs (not efficient)
+# def preprocess_label(labels):
+# 	for i in range(len(labels)):
+# 		labels[i] = image_row_to_current(np.roll(labels[i], digit_width))
+# 	return labels
+
+# def preprocess_label(label):
+# 	label = image_row_to_current(jnp.roll(label, digit_width))
+# 	return label
+
+Y = preprocess_labels(Y)
+#TODO make it efficient
+# Y = list(lax.map(preprocess_label, Y))
+
+
+X_train, X_test, Y_train, Y_test, d_train, d_test = train_test_split(X, Y, d, test_size=10, random_state=99)
+
+train_dataset = Dataset.from_tensor_slices((X_train, Y_train))
+train_dataloader = train_dataset.batch(batch_size)
+test_dataset = Dataset.from_tensor_slices((X_test, Y_test))
+test_dataloader = test_dataset.batch(batch_size)
+
+
+
+def simulate(params, input):
+	data_stimuli = None
+	for row_index, row in enumerate(input):
+		t_max = len(row)
+		# currents = jx.datapoint_to_step_currents(i_delay=0.0, i_dur=1.0, i_amp=row * i_amp, delta_t=delta_t, t_max=t_max)
+		# overall_current = sum_row_currents(currents, pixel_duration, delta_t)
+		overall_current_jnp = image_row_to_current(row)
+		# if row_index % 30 == 0:
+		# 	# visualize_row_currents(overall_current, t_max=currents.shape[0], delta_t=delta_t, row_index=row_index)
+		# 	visualize_row_currents(overall_current_jnp, t_max=t_max, delta_t=delta_t, row_index=row_index)
+		data_stimuli = net.cell(row_index).branch(0).loc(0.0).data_stimulate(overall_current_jnp,
+		                                                                     data_stimuli=data_stimuli)
+		# if jnp.isnan(data_stimuli[0]).any():
+		# 	print("NaN in data_stimuli after data_stimulate")
+		# 	debug.breakpoint()
+	
+	return jx.integrate(net, params=params, data_stimuli=data_stimuli)
+
+batched_simulate = simulate
 # batched_simulate = vmap(simulate, in_axes=(None, 0))
+
+def loss_fn(opt_params, input, label):
+	recording = batched_simulate(opt_params, input[0]) # todo to remove [0]
+	if jnp.isnan(recording).any():
+		print("NaN in recording output")
+		debug.breakpoint()  # Inspect variable values here
+	result = jnp.mean(jnp.abs((recording - label)))
+	# result = jnp.mean((recording - label) ** 2)
+	return result
+
+grad_fn = grad(loss_fn, argnums=0)
+# grad_fn = jit(value_and_grad(loss_fn, argnums=0))
+
+# Define the optimizer.
+optimizer = optax.chain(
+    optax.clip_by_global_norm(1.0),  # Adjust the threshold as needed (start with 1.0 and fine-tune)
+    optax.adam(learning_rate=0.0001)
+)
+opt_state = optimizer.init(opt_params)
+
+# temp = simulate(opt_state, X_train[0])
+#TODO try with batch_size=1
+# try to debug with not jit functions
+for epoch in range(10):
+	epoch_loss = 0.0
+	for batch_index, batch in enumerate(train_dataloader):
+		stimuli = batch[0].numpy()
+		labels = batch[1].numpy()
+		# TODO to figure out why is it Nan and 0
+		# loss now is not 0, but gradient is Nan
+		# loss, gradient = grad_fn(opt_params, stimuli, labels)
+		loss = loss_fn(opt_params, stimuli, labels)
+		gradient = grad_fn(opt_params, stimuli, labels)
+		# debug.breakpoint()
+		if jnp.isnan(loss) or jnp.isnan(gradient[0]['radius']).any():
+			print("NaN in loss or gradient")
+			debug.breakpoint()
+		# Optimizer step.
+		updates, opt_state = optimizer.update(gradient, opt_state)
+		opt_params = optax.apply_updates(opt_params, updates)
+		epoch_loss += loss
+		print(f"epoch {epoch}, batch {batch_index}, loss {epoch_loss}")
+
