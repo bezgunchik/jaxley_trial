@@ -13,6 +13,13 @@ image_width = 1840
 image_height = 128
 
 def load_image(file_path, slice_chars=False, specific_char_index=None):
+	'''
+	:param file_path: image path
+	:param slice_chars: if True, then it's a label image and the function takes only rows that represent characters
+	:param specific_char_index: the index in char_order represented the char of interest, if it specified
+	then only corresponding row will be taken from the image
+	:return:
+	'''
 	image = Image.open(file_path)
 	
 	image = ImageOps.pad(image, (image_width, image_height), centering=(0, 0))
@@ -32,11 +39,10 @@ def pad_arrays(arrays):
 	max_length = max(array.shape[1] for array in arrays)
 	return np.stack([np.pad(array, (0, max_length - array.shape[0]), mode='constant') for array in arrays])
 
-def load_dataset(train_size, test_size):
+def load_dataset():
 	# Set the path to your dataset
 	dataset_foldername = 'math_equations_images_dataset_tiny'
 	curr_file_path = os.path.abspath(os.path.dirname(__file__))
-	# curr_file_path = r"C:\Users\david\Desktop\Code\ImSME-dataset"
 	
 	downloaded_from_kaggle = False
 	if downloaded_from_kaggle:
@@ -52,11 +58,9 @@ def load_dataset(train_size, test_size):
 	# Number of samples to display
 	num_samples_to_show = 2
 	
-	# num_sample_to_load = 16384
-	num_sample_to_load = 110
+	num_sample_to_load = 1100
 	# Randomly sample rows from the dataframe
 	sampled_rows = df.sample(n=num_sample_to_load, random_state=99)
-	# sampled_rows = df.sample(n=num_samples_to_show)
 	
 	# # Create a figure with num_samples_to_show rows and 1 column
 	# fig, axs = plt.subplots(num_samples_to_show, 1, figsize=(14, 3 * num_samples_to_show))
@@ -72,20 +76,12 @@ def load_dataset(train_size, test_size):
 	# plt.tight_layout()
 	# plt.show()
 	#
-	selected_row = df[:1].iloc[0]
-	
-	# Load the equation image
-	eq_img_path = os.path.join(dataset_folder, 'equation_images', selected_row['image_filename'])
-	# eq_img = Image.open(eq_img_path)
-	# eq_array = np.array(eq_img)
-	# image_file_paths = sampled_rows.apply(lambda row: os.path.join(dataset_folder, 'equation_images', sampled_rows['image_filename']), axis=1)
+
 	image_file_paths = sampled_rows['image_filename'].map(lambda x: os.path.join(dataset_folder, 'equation_images', x))
 	
 	eq_images_arrays = np.array(list(map(load_image, image_file_paths.tolist())))
-	# eq_array = np.array(eq_img)
 	
 	# Load the labels image
-	# label_img_path = os.path.join(dataset_folder, 'label_images', selected_row['image_filename'])
 	label_file_paths = sampled_rows['image_filename'].map(lambda x: os.path.join(dataset_folder, 'label_images', x))
 	load_image_with_slice = partial(load_image, slice_chars=True, specific_char_index=2)
 	char_images_arrays = np.array(list(map(load_image_with_slice, label_file_paths.tolist())))

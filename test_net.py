@@ -9,12 +9,9 @@ from tensorflow.data import Dataset
 from jax import lax
 
 
-
-
 def image_row_to_current(row):
 	overall_current_jnp = jnp.repeat(row * i_amp, int(pixel_duration / delta_t))
 	return overall_current_jnp
-	# return jnp.insert(overall_current_jnp, 0, 0)
 	
 def visualize_row_currents(overall_current, t_max, delta_t, row_index):
 	num_time_steps = int(t_max / delta_t) + 1  # Adjusting to include t=0
@@ -48,8 +45,7 @@ def sum_row_currents(row_currents, pixel_duration, delta_t):
 visualize_net = False
 
 i_amp = 0.005
-delta_t = 1.0
-# delta_t = 0.025
+delta_t = 0.025
 pixel_duration = 1
 
 digit_width = 100
@@ -68,8 +64,6 @@ cells = ([input_cell for _ in range(layer0_size)] +
 net = jx.Network(cells)
 
 
-
-
 layer0 = net.cell(range(layer0_size))
 layer1 = net.cell(range(layer0_size, layer0_size + layer1_size))
 layer2 = net.cell(range(layer0_size + layer1_size, layer0_size + layer1_size + layer2_size))
@@ -86,11 +80,8 @@ net.cell(total_cells_num - 1).branch(0).loc(0.0).record()
 
 net.delete_trainables()
 net.make_trainable("radius")
-# net.make_trainable('radius')
 parameters = net.get_parameters()
 opt_params = parameters
-
-
 
 # Visualize net
 if visualize_net:
@@ -98,17 +89,15 @@ if visualize_net:
 	net.rotate(180)
 	fig, ax = plt.subplots(1, 1)
 	_ = net.vis(ax=ax, detail="full", layers=[layer0_size, layer1_size, layer2_size], layer_kwargs={"within_layer_offset": 15, "between_layer_offset": 25})
-	# _ = net.vis(ax=ax, detail="full", layers=[layer0_size, layer1_size, layer2_size], layer_kwargs={"within_layer_offset": 8, "between_layer_offset": 25})
 	plt.show()
 
 # Currently returns 1 sample
-X, Y, d = load_dataset(0, 0)
+X, Y, d = load_dataset()
 
 
 def preprocess_labels(labels):
 	result = jnp.roll(labels, digit_width) # Shift 100 pixels right
 	result = jnp.repeat(result * i_amp, int(pixel_duration / delta_t), axis=1) # Convert to current
-	# return result # Add t0 value
 	return jnp.insert(result, 0, 0, axis=1) # Add t0 value
 
 # The following two functions are for different length inputs (not efficient)
@@ -122,11 +111,8 @@ def preprocess_labels(labels):
 # 	return label
 
 Y = preprocess_labels(Y)
-#TODO make it efficient
-# Y = list(lax.map(preprocess_label, Y))
 
-
-X_train, X_test, Y_train, Y_test, d_train, d_test = train_test_split(X, Y, d, test_size=10, random_state=99)
+X_train, X_test, Y_train, Y_test, d_train, d_test = train_test_split(X, Y, d, test_size=100, random_state=99)
 
 train_dataset = Dataset.from_tensor_slices((X_train, Y_train))
 train_dataloader = train_dataset.batch(batch_size)
@@ -134,39 +120,33 @@ test_dataset = Dataset.from_tensor_slices((X_test, Y_test))
 test_dataloader = test_dataset.batch(batch_size)
 
 
-
 def simulate(params, input):
 	data_stimuli = None
 	for row_index, row in enumerate(input):
-		t_max = len(row)
-		# currents = jx.datapoint_to_step_currents(i_delay=0.0, i_dur=1.0, i_amp=row * i_amp, delta_t=delta_t, t_max=t_max)
-		# overall_current = sum_row_currents(currents, pixel_duration, delta_t)
 		overall_current_jnp = image_row_to_current(row)
-		# if row_index % 30 == 0:
-		# 	# visualize_row_currents(overall_current, t_max=currents.shape[0], delta_t=delta_t, row_index=row_index)
-		# 	visualize_row_currents(overall_current_jnp, t_max=t_max, delta_t=delta_t, row_index=row_index)
 		data_stimuli = net.cell(row_index).branch(0).loc(0.0).data_stimulate(overall_current_jnp,
 		                                                                     data_stimuli=data_stimuli)
 		# if jnp.isnan(data_stimuli[0]).any():
 		# 	print("NaN in data_stimuli after data_stimulate")
 		# 	debug.breakpoint()
-	
 	return jx.integrate(net, params=params, data_stimuli=data_stimuli)
 
-batched_simulate = simulate
-# batched_simulate = vmap(simulate, in_axes=(None, 0))
+
+batched_simulate = vmap(simulate, in_axes=(None, 0))
+## version for single sample (only for debugging)
+# batched_simulate = simulate
 
 def loss_fn(opt_params, input, label):
-	recording = batched_simulate(opt_params, input[0]) # todo to remove [0]
+	recording = batched_simulate(opt_params, input)
 	if jnp.isnan(recording).any():
 		print("NaN in recording output")
 		debug.breakpoint()  # Inspect variable values here
 	result = jnp.mean(jnp.abs((recording - label)))
-	# result = jnp.mean((recording - label) ** 2)
+	# result = jnp.mean((recording - label) ** 2) # MSE version
 	return result
 
-grad_fn = grad(loss_fn, argnums=0)
-# grad_fn = jit(value_and_grad(loss_fn, argnums=0))
+grad_fn = jit(grad(loss_fn, argnums=0))
+loss_and_grad_fn = jit(value_and_grad(loss_fn, argnums=0))
 
 # Define the optimizer.
 optimizer = optax.chain(
@@ -175,23 +155,21 @@ optimizer = optax.chain(
 )
 opt_state = optimizer.init(opt_params)
 
-# temp = simulate(opt_state, X_train[0])
-#TODO try with batch_size=1
-# try to debug with not jit functions
 for epoch in range(10):
 	epoch_loss = 0.0
 	for batch_index, batch in enumerate(train_dataloader):
 		stimuli = batch[0].numpy()
 		labels = batch[1].numpy()
-		# TODO to figure out why is it Nan and 0
-		# loss now is not 0, but gradient is Nan
-		# loss, gradient = grad_fn(opt_params, stimuli, labels)
-		loss = loss_fn(opt_params, stimuli, labels)
-		gradient = grad_fn(opt_params, stimuli, labels)
+		# For now, gradient is always Nan
+		loss, gradient = loss_and_grad_fn(opt_params, stimuli, labels)
+		
+		# loss = loss_fn(opt_params, stimuli, labels)
+		# gradient = grad_fn(opt_params, stimuli, labels)
 		# debug.breakpoint()
-		if jnp.isnan(loss) or jnp.isnan(gradient[0]['radius']).any():
-			print("NaN in loss or gradient")
-			debug.breakpoint()
+		# if jnp.isnan(loss) or jnp.isnan(gradient[0]['radius']).any():
+		# 	print("NaN in loss or gradient")
+		# 	debug.breakpoint()
+		
 		# Optimizer step.
 		updates, opt_state = optimizer.update(gradient, opt_state)
 		opt_params = optax.apply_updates(opt_params, updates)
